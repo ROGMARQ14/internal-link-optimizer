@@ -4,6 +4,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 from typing import List
+import sys
+
+# Add the project root to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
 # Load environment variables
 load_dotenv()
