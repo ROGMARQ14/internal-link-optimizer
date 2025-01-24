@@ -3,12 +3,13 @@ import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+from typing import List
 
 # Load environment variables
 load_dotenv()
 
 # Import local modules
-from src.data_processor import GSCDataProcessor
+from src.data_processor import URLProcessor
 from src.content_analyzer import ContentAnalyzer
 from src.link_optimizer import LinkOptimizer
 from src.report_generator import ReportGenerator
@@ -26,6 +27,16 @@ class App:
     def __init__(self):
         self.config = Config()
         self.cache_manager = CacheManager()
+        
+    def parse_urls(self, text: str) -> List[str]:
+        """Parse URLs from text input."""
+        # Split by common separators and clean
+        urls = []
+        for line in text.split('\n'):
+            # Split by comma if present
+            parts = line.split(',') if ',' in line else [line]
+            urls.extend([url.strip() for url in parts if url.strip()])
+        return urls
         
     def main(self):
         st.title("Internal Linking Optimizer")
@@ -71,15 +82,37 @@ class App:
             )
         
         # Main content area
+        st.write("""
+        ## URL Input
+        Enter your URLs below (one per line) or upload a text file containing URLs.
+        You can also paste URLs separated by commas.
+        """)
+        
+        # File upload option
         uploaded_file = st.file_uploader(
-            "Upload Google Search Console CSV",
-            type=['csv']
+            "Upload a text file with URLs",
+            type=['txt', 'csv']
         )
         
-        if uploaded_file is not None:
+        # Text input option
+        url_text = st.text_area(
+            "Or paste your URLs here",
+            height=200,
+            help="Enter URLs (one per line or comma-separated)"
+        )
+        
+        # Process URLs
+        urls = []
+        if uploaded_file:
+            content = uploaded_file.getvalue().decode()
+            urls = self.parse_urls(content)
+        elif url_text:
+            urls = self.parse_urls(url_text)
+        
+        if urls:
             try:
                 # Initialize processors
-                gsc_processor = GSCDataProcessor(uploaded_file)
+                url_processor = URLProcessor(urls)
                 content_analyzer = ContentAnalyzer(
                     similarity_threshold=similarity_threshold,
                     entity_threshold=entity_threshold
@@ -87,9 +120,12 @@ class App:
                 link_optimizer = LinkOptimizer()
                 report_generator = ReportGenerator()
                 
-                # Process data
-                with st.spinner("Processing GSC data..."):
-                    gsc_data = gsc_processor.process()
+                # Process URLs
+                with st.spinner("Processing URLs..."):
+                    url_data = url_processor.process()
+                    
+                    # Show basic stats
+                    st.write(f"Found {len(url_data['urls'])} valid URLs across {len(url_data['domains'])} domains")
                 
                 # Analyze content
                 if st.button("Start Analysis"):
@@ -99,7 +135,7 @@ class App:
                     # Content analysis
                     status_text.text("Analyzing content...")
                     content_data = content_analyzer.analyze(
-                        gsc_data,
+                        url_data,
                         scraping_rate=scraping_rate,
                         js_timeout=js_timeout,
                         progress_callback=lambda x: progress_bar.progress(x)
@@ -112,7 +148,7 @@ class App:
                     # Generate report
                     status_text.text("Generating report...")
                     report = report_generator.generate(
-                        gsc_data,
+                        url_data,
                         content_data,
                         optimization_results
                     )
