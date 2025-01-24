@@ -1,80 +1,78 @@
 import pandas as pd
 from typing import Dict, List
 import logging
+from urllib.parse import urlparse
 
-class GSCDataProcessor:
-    """Processes Google Search Console data from CSV exports."""
+class URLProcessor:
+    """Processes a list of URLs for internal linking analysis."""
     
-    def __init__(self, file_path: str):
-        """Initialize the processor with the CSV file path."""
-        self.file_path = file_path
+    def __init__(self, urls: List[str]):
+        """Initialize the processor with a list of URLs."""
+        self.urls = urls
         self.logger = logging.getLogger(__name__)
         
-    def validate_csv(self, df: pd.DataFrame) -> bool:
-        """Validate if the CSV has the required columns."""
-        required_columns = ['Query', 'Landing Page', 'Clicks', 'Impressions', 'CTR', 'Position']
-        return all(col in df.columns for col in required_columns)
+    def validate_urls(self, urls: List[str]) -> List[str]:
+        """Validate URLs and ensure they are properly formatted."""
+        valid_urls = []
+        for url in urls:
+            try:
+                # Clean the URL
+                url = url.strip().lower()
+                if not url.startswith(('http://', 'https://')):
+                    url = 'https://' + url
+                
+                # Parse URL to validate
+                parsed = urlparse(url)
+                if parsed.netloc and parsed.scheme:
+                    valid_urls.append(url.rstrip('/'))
+                else:
+                    self.logger.warning(f"Invalid URL format: {url}")
+            except Exception as e:
+                self.logger.error(f"Error processing URL {url}: {str(e)}")
+                
+        return valid_urls
     
-    def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and prepare the data."""
-        # Remove any duplicate rows
-        df = df.drop_duplicates()
-        
-        # Remove rows with missing values
-        df = df.dropna(subset=['Query', 'Landing Page'])
-        
-        # Clean URLs (remove trailing slashes, normalize to lowercase)
-        df['Landing Page'] = df['Landing Page'].str.lower().str.rstrip('/')
-        
-        # Clean queries (remove extra whitespace, normalize to lowercase)
-        df['Query'] = df['Query'].str.lower().str.strip()
-        
-        return df
+    def extract_domain(self, url: str) -> str:
+        """Extract domain from URL."""
+        return urlparse(url).netloc
     
-    def extract_unique_urls(self, df: pd.DataFrame) -> List[str]:
-        """Extract list of unique URLs from the data."""
-        return df['Landing Page'].unique().tolist()
-    
-    def extract_unique_queries(self, df: pd.DataFrame) -> List[str]:
-        """Extract list of unique queries from the data."""
-        return df['Query'].unique().tolist()
+    def group_by_domain(self, urls: List[str]) -> Dict[str, List[str]]:
+        """Group URLs by their domain."""
+        domains = {}
+        for url in urls:
+            domain = self.extract_domain(url)
+            if domain not in domains:
+                domains[domain] = []
+            domains[domain].append(url)
+        return domains
     
     def process(self) -> Dict:
-        """Process the GSC data and return processed information."""
+        """Process the URLs and return processed information."""
         try:
-            # Read CSV file
-            df = pd.read_csv(self.file_path)
+            # Validate URLs
+            valid_urls = self.validate_urls(self.urls)
             
-            # Validate CSV structure
-            if not self.validate_csv(df):
-                raise ValueError("Invalid CSV format: missing required columns")
+            if not valid_urls:
+                raise ValueError("No valid URLs provided")
             
-            # Clean the data
-            df = self.clean_data(df)
+            # Group URLs by domain
+            domain_groups = self.group_by_domain(valid_urls)
             
-            # Extract unique URLs and queries
-            unique_urls = self.extract_unique_urls(df)
-            unique_queries = self.extract_unique_queries(df)
-            
-            # Group data by Landing Page for easier processing
+            # Create basic structure for each URL
             url_data = {}
-            for url in unique_urls:
+            for url in valid_urls:
                 url_data[url] = {
-                    'queries': df[df['Landing Page'] == url]['Query'].tolist(),
-                    'metrics': {
-                        'clicks': df[df['Landing Page'] == url]['Clicks'].sum(),
-                        'impressions': df[df['Landing Page'] == url]['Impressions'].sum(),
-                        'avg_position': df[df['Landing Page'] == url]['Position'].mean()
-                    }
+                    'domain': self.extract_domain(url),
+                    'path': urlparse(url).path
                 }
             
             return {
-                'dataframe': df,
-                'unique_urls': unique_urls,
-                'unique_queries': unique_queries,
-                'url_data': url_data
+                'urls': valid_urls,
+                'domains': list(domain_groups.keys()),
+                'url_data': url_data,
+                'domain_groups': domain_groups
             }
             
         except Exception as e:
-            self.logger.error(f"Error processing GSC data: {str(e)}")
+            self.logger.error(f"Error processing URLs: {str(e)}")
             raise
