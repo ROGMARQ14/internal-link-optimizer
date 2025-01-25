@@ -50,13 +50,27 @@ class App:
         with st.sidebar:
             st.header("Configuration")
             
+            # AI Features
+            st.subheader("AI Features")
+            use_ai_features = st.toggle(
+                "Enable AI-powered enhancements",
+                value=False,
+                help="Use OpenAI to enhance entity detection and generate content suggestions"
+            )
+            
+            if use_ai_features and not os.getenv('OPENAI_API_KEY'):
+                st.warning(
+                    "OpenAI API key not found. Please add it to your .env file "
+                    "to use AI features: OPENAI_API_KEY=your_key_here"
+                )
+            
             # Thresholds
             st.subheader("Thresholds")
             similarity_threshold = st.slider(
                 "Semantic Similarity Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.85,
+                value=0.3,
                 step=0.01
             )
             
@@ -122,7 +136,10 @@ class App:
                     similarity_threshold=similarity_threshold,
                     entity_threshold=entity_threshold
                 )
-                link_optimizer = LinkOptimizer()
+                link_optimizer = LinkOptimizer(
+                    min_similarity=similarity_threshold,
+                    use_ai_features=use_ai_features
+                )
                 report_generator = ReportGenerator()
                 
                 # Process URLs
