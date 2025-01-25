@@ -21,6 +21,10 @@ from src.report_generator import ReportGenerator
 from utils.cache_manager import CacheManager
 from utils.config import Config
 
+# Initialize session state for API key
+if 'openai_api_key' not in st.session_state:
+    st.session_state.openai_api_key = os.getenv('OPENAI_API_KEY', '')
+
 # Set page config
 st.set_page_config(
     page_title="Internal Linking Optimizer",
@@ -58,11 +62,24 @@ class App:
                 help="Use OpenAI to enhance entity detection and generate content suggestions"
             )
             
-            if use_ai_features and not os.getenv('OPENAI_API_KEY'):
-                st.warning(
-                    "OpenAI API key not found. Please add it to your .env file "
-                    "to use AI features: OPENAI_API_KEY=your_key_here"
+            # Only show API key input if AI features are enabled
+            if use_ai_features:
+                api_key_input = st.text_input(
+                    "Enter your OpenAI API key",
+                    type="password",
+                    value=st.session_state.openai_api_key,
+                    help="Required for AI features. Get your key from https://platform.openai.com/api-keys"
                 )
+                
+                # Update session state if API key changed
+                if api_key_input != st.session_state.openai_api_key:
+                    st.session_state.openai_api_key = api_key_input
+                    os.environ['OPENAI_API_KEY'] = api_key_input
+                
+                if not st.session_state.openai_api_key:
+                    st.error("Please enter your OpenAI API key to use AI features.")
+                else:
+                    st.success("AI features enabled!")
             
             # Thresholds
             st.subheader("Thresholds")
@@ -70,16 +87,18 @@ class App:
                 "Semantic Similarity Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.3,
-                step=0.01
+                value=0.80,
+                step=0.01,
+                help="Higher values mean more strict matching between pages"
             )
             
             entity_threshold = st.slider(
                 "Entity Relevance Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.85,
-                step=0.01
+                value=0.80,
+                step=0.01,
+                help="Higher values mean more relevant entity matching"
             )
             
             # Scraping settings
@@ -91,7 +110,6 @@ class App:
                 value=3,
                 step=1
             )
-            
             js_timeout = st.slider(
                 "JavaScript Timeout (seconds)",
                 min_value=5,
@@ -136,9 +154,13 @@ class App:
                     similarity_threshold=similarity_threshold,
                     entity_threshold=entity_threshold
                 )
+                
+                # Only proceed with AI features if API key is available
+                can_use_ai = use_ai_features and st.session_state.openai_api_key
+                
                 link_optimizer = LinkOptimizer(
                     min_similarity=similarity_threshold,
-                    use_ai_features=use_ai_features
+                    use_ai_features=can_use_ai
                 )
                 report_generator = ReportGenerator()
                 
