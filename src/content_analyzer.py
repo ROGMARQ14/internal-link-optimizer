@@ -15,9 +15,15 @@ import multiprocessing
 class ContentAnalyzer:
     """Analyzes webpage content using efficient NLP techniques."""
     
-    def __init__(self, similarity_threshold: float = 0.85):
-        """Initialize the content analyzer with configuration."""
+    def __init__(self, similarity_threshold: float = 0.80, entity_threshold: float = 0.80):
+        """Initialize the content analyzer with configuration.
+        
+        Args:
+            similarity_threshold: Threshold for semantic similarity (0.0 to 1.0)
+            entity_threshold: Threshold for entity relevance (0.0 to 1.0)
+        """
         self.similarity_threshold = similarity_threshold
+        self.entity_threshold = entity_threshold
         self.logger = logging.getLogger(__name__)
         
         # Initialize spaCy
@@ -84,13 +90,15 @@ class ContentAnalyzer:
         entity_freq = Counter(ent[0].lower() for ent in ner_entities)
         phrase_freq = Counter(phrase.lower() for phrase in noun_phrases)
         
-        # Combine and filter entities
+        # Combine and filter entities based on threshold
+        total_words = len(doc)
         for text, count in {**entity_freq, **phrase_freq}.items():
-            if count >= 2:  # Only include entities that appear multiple times
+            salience = count / total_words
+            if salience >= self.entity_threshold:
                 entities.append({
                     'text': text,
                     'count': count,
-                    'salience': count / len(doc)  # Simple salience score
+                    'salience': salience
                 })
         
         return entities
