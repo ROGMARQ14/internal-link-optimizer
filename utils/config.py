@@ -14,7 +14,7 @@ class Config:
         self.logger = logging.getLogger(__name__)
         
         # Default thresholds
-        self.similarity_threshold = 0.3
+        self.similarity_threshold = 0.80
         
         # Scraping settings
         self.default_scraping_rate = 3
