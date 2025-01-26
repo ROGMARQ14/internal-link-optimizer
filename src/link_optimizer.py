@@ -1,204 +1,118 @@
 from typing import Dict, List
 import logging
-import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
 from collections import defaultdict
-import multiprocessing
-from itertools import combinations
-import openai
+import concurrent.futures
 from dataclasses import dataclass
-import json
+from functools import lru_cache
 
 @dataclass
 class LinkSuggestion:
     source_url: str
     target_url: str
+    relevance_score: float
     anchor_text: str
     context: str
-    similarity_score: float
-    content_suggestion: str = None
-    enhanced_entities: List[str] = None
 
 class LinkOptimizer:
-    """Optimizes internal linking using efficient similarity calculations with optional AI enhancements."""
+    """Optimizes internal linking structure using efficient algorithms."""
     
-    def __init__(self, min_similarity: float = 0.3, use_ai_features: bool = False):
-        """Initialize the optimizer.
-        
-        Args:
-            min_similarity: Minimum similarity score for link suggestions
-            use_ai_features: Whether to use OpenAI-powered enhancements
-        """
+    def __init__(self, min_similarity: float = 0.80, use_ai_features: bool = False):
         self.min_similarity = min_similarity
         self.use_ai_features = use_ai_features
         self.logger = logging.getLogger(__name__)
         
-    def calculate_similarity_score(self, source_entities: List[Dict], 
-                                 target_entities: List[Dict]) -> float:
-        """Calculate similarity score between two pages based on their entities."""
-        if not source_entities or not target_entities:
-            return 0.0
-            
-        # Create entity sets with weights
-        source_dict = {e['text']: e['salience'] for e in source_entities}
-        target_dict = {e['text']: e['salience'] for e in target_entities}
-        
-        # Find common entities
-        common_entities = set(source_dict.keys()) & set(target_dict.keys())
-        if not common_entities:
-            return 0.0
-            
-        # Calculate weighted similarity
-        similarity = sum(source_dict[entity] * target_dict[entity] 
-                        for entity in common_entities)
-        
-        # Normalize
-        max_possible = max(
-            sum(source_dict.values()),
-            sum(target_dict.values())
+        # Initialize TF-IDF vectorizer with optimized settings
+        self.vectorizer = TfidfVectorizer(
+            stop_words='english',
+            max_features=3000,
+            ngram_range=(1, 2),
+            max_df=0.95,
+            min_df=2
         )
         
-        return similarity / max_possible if max_possible > 0 else 0.0
+        # Initialize results cache
+        self.similarity_cache = {}
         
-    def enhance_entities_with_ai(self, content: str, existing_entities: List[Dict]) -> List[str]:
-        """Use OpenAI to discover additional relevant entities and keywords."""
-        if not self.use_ai_features:
-            return []
-            
+    @lru_cache(maxsize=1000)
+    def calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calculate cosine similarity between two texts efficiently."""
         try:
-            prompt = f"""
-            Content excerpt: {content[:1000]}...
+            # Transform texts to TF-IDF vectors
+            tfidf_matrix = self.vectorizer.fit_transform([text1, text2])
+            return float(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0])
+        except Exception:
+            return 0.0
             
-            Existing entities: {[e['text'] for e in existing_entities]}
-            
-            Task: Identify 5-10 additional relevant entities, keywords, or phrases that could be 
-            good candidates for internal linking. Focus on:
-            1. Industry-specific terms
-            2. Related concepts
-            3. Synonyms or alternative phrasings
-            4. Broader/narrower terms
-            
-            Return as a JSON array of strings.
-            """
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an SEO expert specializing in content analysis."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-            
-            # Parse the response as JSON array
-            enhanced_entities = json.loads(response.choices[0].message.content)
-            return enhanced_entities
-            
-        except Exception as e:
-            self.logger.error(f"Error enhancing entities with AI: {str(e)}")
-            return []
-            
-    def generate_content_suggestion(self, source_content: str, target_content: str, 
-                                  anchor_text: str) -> str:
-        """Generate a natural content suggestion for adding the link."""
-        if not self.use_ai_features:
-            return None
-            
-        try:
-            prompt = f"""
-            Source content excerpt: {source_content[:500]}...
-            Target page topic: {target_content[:200]}...
-            Desired anchor text: {anchor_text}
-            
-            Task: Generate a natural, 1-2 sentence suggestion for adding a link using the anchor text.
-            The suggestion should:
-            1. Flow naturally with the existing content
-            2. Provide value to readers
-            3. Make sense in the context
-            4. Be concise and focused
-            """
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert content editor."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            self.logger.error(f"Error generating content suggestion: {str(e)}")
-            return None
-        
-    def find_anchor_text(self, source_content: str, target_entities: List[Dict]) -> str:
-        """Find the best anchor text from the source content."""
-        best_anchor = None
-        best_score = 0
-        
-        # Sort entities by salience
+    def find_best_anchor_text(self, source_entities: List[Dict], 
+                             target_entities: List[Dict]) -> str:
+        """Find the best anchor text based on entity overlap."""
+        # Sort entities by salience score
+        source_entities = sorted(source_entities, key=lambda x: x['salience'], reverse=True)
         target_entities = sorted(target_entities, key=lambda x: x['salience'], reverse=True)
         
-        # Try to find entity mentions in the source content
-        for entity in target_entities:
-            entity_text = entity['text'].lower()
-            if entity_text in source_content.lower():
-                score = entity['salience']
-                if score > best_score:
-                    best_score = score
-                    best_anchor = entity_text
-                    
-        return best_anchor.title() if best_anchor else target_entities[0]['text'].title()
+        # Find overlapping entities
+        source_texts = {e['text'].lower() for e in source_entities}
+        target_texts = {e['text'].lower() for e in target_entities}
+        common_entities = source_texts.intersection(target_texts)
         
-    def process_url_pair(self, pair: tuple, analyzed_data: Dict) -> LinkSuggestion:
-        """Process a pair of URLs for linking opportunities."""
-        source_url, target_url = pair
-        
-        # Skip self-linking
-        if source_url == target_url:
-            return None
-            
-        source_data = analyzed_data[source_url]
-        target_data = analyzed_data[target_url]
-        
-        # Calculate similarity
-        similarity = self.calculate_similarity_score(
-            source_data['entities'],
-            target_data['entities']
-        )
-        
-        if similarity >= self.min_similarity:
-            anchor_text = self.find_anchor_text(
-                source_data['content'],
-                target_data['entities']
+        if common_entities:
+            # Get the most salient common entity
+            best_entity = max(
+                (e for e in source_entities if e['text'].lower() in common_entities),
+                key=lambda x: x['salience']
             )
+            return best_entity['text']
             
-            # Optional AI enhancements
-            enhanced_entities = None
-            content_suggestion = None
+        # Fallback to most salient target entity
+        return target_entities[0]['text'] if target_entities else ""
+        
+    def process_url_pair(self, source_url: str, target_url: str, 
+                        analyzed_data: Dict) -> LinkSuggestion:
+        """Process a pair of URLs to generate link suggestions."""
+        try:
+            source_data = analyzed_data[source_url]
+            target_data = analyzed_data[target_url]
             
-            if self.use_ai_features:
-                enhanced_entities = self.enhance_entities_with_ai(
-                    target_data['content'],
+            # Calculate similarity score
+            cache_key = (source_url, target_url)
+            if cache_key not in self.similarity_cache:
+                similarity = self.calculate_similarity(
+                    source_data['content'],
+                    target_data['content']
+                )
+                self.similarity_cache[cache_key] = similarity
+            else:
+                similarity = self.similarity_cache[cache_key]
+            
+            if similarity >= self.min_similarity:
+                # Find best anchor text
+                anchor_text = self.find_best_anchor_text(
+                    source_data['entities'],
                     target_data['entities']
                 )
-                content_suggestion = self.generate_content_suggestion(
-                    source_data['content'],
-                    target_data['content'],
-                    anchor_text
+                
+                # Get context (first paragraph containing the anchor text)
+                context = ""
+                if anchor_text:
+                    paragraphs = source_data['content'].split('\n')
+                    for para in paragraphs:
+                        if anchor_text.lower() in para.lower():
+                            context = para[:200] + "..." if len(para) > 200 else para
+                            break
+                
+                return LinkSuggestion(
+                    source_url=source_url,
+                    target_url=target_url,
+                    relevance_score=similarity,
+                    anchor_text=anchor_text,
+                    context=context
                 )
-            
-            return LinkSuggestion(
-                source_url=source_url,
-                target_url=target_url,
-                anchor_text=anchor_text,
-                context=source_data['content'][:200],  # Preview
-                similarity_score=similarity,
-                content_suggestion=content_suggestion,
-                enhanced_entities=enhanced_entities
-            )
+                
+        except Exception as e:
+            self.logger.error(f"Error processing {source_url} -> {target_url}: {str(e)}")
             
         return None
         
@@ -207,18 +121,49 @@ class LinkOptimizer:
         urls = list(analyzed_data.keys())
         suggestions = []
         
-        # Generate URL pairs
-        url_pairs = list(combinations(urls, 2))
+        # Group URLs by domain for more relevant suggestions
+        domain_groups = defaultdict(list)
+        for url in urls:
+            domain = url.split('/')[2]  # Extract domain from URL
+            domain_groups[domain].append(url)
         
-        # Process pairs in parallel
-        with multiprocessing.Pool() as pool:
-            results = pool.starmap(
-                self.process_url_pair,
-                [(pair, analyzed_data) for pair in url_pairs]
-            )
+        # Process each domain group in parallel
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
             
-        # Filter and sort results
-        suggestions = [r for r in results if r is not None]
-        suggestions.sort(key=lambda x: x.similarity_score, reverse=True)
+            for domain_urls in domain_groups.values():
+                # Only process URLs within the same domain
+                for i, source_url in enumerate(domain_urls):
+                    for target_url in domain_urls[i+1:]:
+                        futures.append(
+                            executor.submit(
+                                self.process_url_pair,
+                                source_url,
+                                target_url,
+                                analyzed_data
+                            )
+                        )
+            
+            # Collect results
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        suggestions.append(result)
+                except Exception as e:
+                    self.logger.error(f"Error processing URL pair: {str(e)}")
         
-        return suggestions
+        # Sort suggestions by relevance score
+        suggestions.sort(key=lambda x: x.relevance_score, reverse=True)
+        
+        # Limit suggestions per URL
+        url_suggestions = defaultdict(list)
+        for sugg in suggestions:
+            if len(url_suggestions[sugg.source_url]) < 10:  # Max 10 suggestions per URL
+                url_suggestions[sugg.source_url].append(sugg)
+        
+        # Flatten and return final suggestions
+        return [
+            sugg for suggestions in url_suggestions.values()
+            for sugg in suggestions
+        ]
